@@ -40,6 +40,10 @@ std::unique_ptr<ASTNode> Parser::term(){
 
 
 std::unique_ptr<ASTNode> Parser::factor(){
+    if (currentToken.type == TokenType::MINUS){
+        eat(TokenType::MINUS);
+        return std::make_unique<BinaryOpNode>("-", std::make_unique<NumberNode>(0), factor());
+    }
     if (currentToken.type == TokenType::NUMBER){
         int val = std::stoi(currentToken.value);
         eat(TokenType::NUMBER);
