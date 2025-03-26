@@ -24,3 +24,18 @@ struct BinaryOpNode : ASTNode{
                 std::unique_ptr<ASTNode> right)
             : op(op), left(std::move(left)), right(std::move(right)) {}
 };
+
+// 변수 이름을 받는 Node
+struct VariableNode : ASTNode {
+    std::string name;
+    VariableNode(const std::string& name) : name(name) {}
+};
+
+// 
+struct AssignNode: ASTNode{
+    std::string name;
+    std::unique_ptr<ASTNode> value;
+
+    AssignNode(const std::string& name, std::unique_ptr<ASTNode> value)
+        : name(name), value(std::move(value)) {}
+};
