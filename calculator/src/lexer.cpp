@@ -12,9 +12,20 @@ Token Lexer::getNextToken() {
             advance();
             continue;
         }
+        
+        if (std::isalpha(current)) {
+            return Token{TokenType::ID, identifier()};
+        }
+
         if (std::isdigit(current)) {
             return Token{TokenType::NUMBER, integer()};
         }
+
+        if (current == '=') {
+            advance();
+            return Token{TokenType::ASSIGN, "="};
+        }
+        
         if (current == '+') {
             advance();
             return Token{TokenType::PLUS, "+"};
@@ -52,7 +63,14 @@ void Lexer::advance() {
         current = text[pos];
     }
 }
-
+std::string Lexer::identifier() {
+    std::string result;
+    while (std::isalnum(current) || current == '_') {
+        result += current;
+        advance();
+    }
+    return result;
+}
 std::string Lexer::integer() {
     std::string result;
     while (std::isdigit(current)) {
