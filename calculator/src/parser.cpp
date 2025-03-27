@@ -1,5 +1,6 @@
 #include "parser.hpp"
 #include <stdexcept>
+#include <iostream>
 
 Parser::Parser(Lexer& lexer) : lexer(lexer){
     currentToken = lexer.getNextToken();
@@ -14,6 +15,20 @@ void Parser::eat(TokenType type){
 }
 
 std::unique_ptr<ASTNode> Parser::expression(){
+    // ID 추가
+    if (currentToken.type == TokenType::ID){
+        std::string varName = currentToken.value;
+        eat(TokenType::ID);
+
+        if (currentToken.type == TokenType::ASSIGN) {
+            eat(TokenType::ASSIGN);
+            auto expr = expression();
+            return std::make_unique<AssignNode>(varName, std::move(expr));
+        } else {
+            return std::make_unique<VariableNode>(varName);
+        }
+    }
+
     auto node = term();
 
     while (currentToken.type == TokenType::PLUS ||
@@ -40,6 +55,13 @@ std::unique_ptr<ASTNode> Parser::term(){
 
 
 std::unique_ptr<ASTNode> Parser::factor(){
+    std::cout << "Current token in factor(): " << currentToken.value << std::endl;
+    if (currentToken.type == TokenType::ID){
+        std::string name = currentToken.value;
+        eat(TokenType::ID);
+        return std::make_unique<VariableNode>(name);  // ← x, y, z 
+    }
+    
     if (currentToken.type == TokenType::MINUS){
         eat(TokenType::MINUS);
         return std::make_unique<BinaryOpNode>("-", std::make_unique<NumberNode>(0), factor());
@@ -49,7 +71,7 @@ std::unique_ptr<ASTNode> Parser::factor(){
         eat(TokenType::NUMBER);
         return std::make_unique<NumberNode>(val);
     }
-    else if (currentToken.type == TokenType::LPAREN){
+    if (currentToken.type == TokenType::LPAREN){
         eat(TokenType::LPAREN);
         auto node = expression();
         eat(TokenType::RPAREN);
