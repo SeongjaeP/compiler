@@ -9,7 +9,9 @@ enum class TokenType{
     MUL,
     LPAREN,
     RPAREN,
-    END
+    END,
+    ID,
+    ASSIGN
 };
 
 struct Token{
