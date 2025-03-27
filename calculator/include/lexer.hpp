@@ -11,7 +11,8 @@ private:
     std::string text;
     size_t pos;
     char current;
-
+    
     void advance();
     std::string integer();
+    std::string identifier();
 };
