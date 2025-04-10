@@ -1,6 +1,19 @@
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
 #include <iostream>
 #include <string>
 #include <vector>
+#include <memory>
+#include <map>
 
 using namespace std;
 
@@ -79,14 +92,23 @@ static int gettok(){
 class ExprAST {
 public:
     virtual ~ExprAST() {}
+    virtual Value *codegen() = 0;
 };
+
+
 
 class NumberExprAST : public ExprAST {
     double Val;
 
 public:
     NumberExprAST(double V) : Val(V) {}
+    virtual Value *codegen();
 };
+
+Value *NumberExprAST::codegen() {
+    return ConstantFP::get(TheContext, APFloat(Val));
+}
+
 
 /// VariableExprAST - Expression class for referencing a variable, like "a".
 class VariableExprAST : public ExprAST {
@@ -95,6 +117,14 @@ class VariableExprAST : public ExprAST {
 public:
   VariableExprAST(const std::string &Name) : Name(Name) {}
 };
+
+Value *VariableExprAST::codegen() {
+    Value *V = NamedValues[Name];
+    if (!V) {
+        LogError("Unknown variable name");
+    }
+    return V;
+}
 
 class BinaryExprAST : public ExprAST {
     char Op; // + - * / > <
@@ -106,6 +136,26 @@ public:
         std::unique_ptr<ExprAST> RHS
     ): Op(op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
 };
+
+Value *BinaryExprAST::codegen() {
+    Value *L = LHS -> codegen();
+    Value *R = RHS -> codegen();
+    if (!L || !R){
+        return nullptr;
+    }
+
+    switch(Op){
+        case '+':
+            return Builder.CreateFAdd(L, R, "addtmp");
+        case '-':
+            return Builder.CreateFAdd(L, R, "subtmp");
+        case '*':
+            return Builder.CreateFAdd(L, R, "multmp");
+        case '<':
+            L = Builder.CreateUIToFP(L, Type::getDoubleTy)
+    }
+}
+
 
 class CallExprAST : public ExprAST {
   std::string Callee;
@@ -161,6 +211,60 @@ static std::unique_ptr<ExprAST> ParseNumberExpr(){
     return std::move(Result);
 }
 
+static std::unique_ptr<ExprAST> ParsePrimary();
+static std::unique_ptr<ExprAST> ParseBinOpRHS(int, std::unique_ptr<ExprAST>);
+
+static std::unique_ptr<ExprAST> ParseExpression() {
+    auto LHS = ParsePrimary();
+    if (!LHS)
+        return nullptr;
+
+    return ParseBinOpRHS(0, std::move(LHS));
+}
+
+static std::unique_ptr<ExprAST> ParseIdentifierExpr(){
+    std::string IdName = IdentifierStr;
+    getNextToken(); // eat identifier
+
+    if (CurTok != '(')
+        return std::make_unique<VariableExprAST>(IdName);
+
+    // Function call
+    getNextToken(); // eat '('
+    std::vector<std::unique_ptr<ExprAST>> Args;
+    if (CurTok != ')') {
+        while (true) {
+            auto Arg = ParseExpression();
+            if (!Arg) return nullptr;
+            Args.push_back(std::move(Arg));
+
+            if (CurTok == ')') break;
+            if (CurTok != ',')
+                return LogError("Expected ')' or ',' in argument list");
+            getNextToken();
+        }
+    }
+    getNextToken(); // eat ')'
+    return std::make_unique<CallExprAST>(IdName, std::move(Args));
+}
+
+static std::unique_ptr<ExprAST> ParseParenExpr();
+
+static std::unique_ptr<ExprAST> ParsePrimary(){
+    switch (CurTok){
+        case tok_identifier:
+            return ParseIdentifierExpr();
+        case tok_number:
+            return ParseNumberExpr();
+        case '(':
+            return ParseParenExpr();
+        default:
+            return LogError("unknown token when expecting an expression");
+    }
+}
+
+
+
 static std::unique_ptr<ExprAST> ParseParenExpr() {
     getNextToken(); // eat '('
     auto V = ParseExpression();
@@ -177,53 +281,7 @@ static std::unique_ptr<ExprAST> ParseParenExpr() {
 
 }
 
-static std::unique_ptr<ExprAST> ParseIdentifierExpr(){
-    std::string IdName = IdentifierStr;
 
-    getNextToken(); // eat iden
-
-    if (CurTok != '(') {
-        getNextToken(); // eat '('
-        std::vector<std::unique_ptr<ExprAST>> Args;
-        while (true){
-            auto Arg = ParseExpression();
-            if (Arg){
-                Args.push_back(Arg);
-            } else{
-                return nullptr;
-            }
-            if (CurTok == ')') {
-                getNextToken();
-                break;
-            }
-            if (CurTok = ',') {
-                getNextToken(); // eat comma
-                continue;
-            } else {
-                return LogError("Expected ')' or ',' in argument list");
-            }
-
-        }
-        return std::make_unique<CallExprAST>(IdName, std::move(Args));
-
-    } else{
-        return std::make_unique<VariableExprAST>(IdName);
-        }
-}
-
-
-static std::unique_ptr<ExprAST> ParsePrimary(){
-    switch (CurTok){
-        case tok_identifier:
-            return ParseIdentifierExpr();
-        case tok_number:
-            return ParseNumberExpr();
-        case '(':
-            return ParseParenExpr();
-        default:
-            return LogError("unknown token when expecting an expression");
-    }
-}
 
 static int GetTokPrecedence(){
     switch (CurTok){
@@ -242,14 +300,6 @@ static int GetTokPrecedence(){
     }
 }
 
-static std::unique_ptr<ExprAST> ParseExpression() {
-    auto LHS = ParsePrimary();
-    if (!LHS) {
-        return ParseBinOpRHS(0, std::move(LHS));
-    }
-
-    return nullptr;
-}
 
 static std::unique_ptr<ExprAST> ParseBinOpRHS(
     int ExprPrec, // precedence number
@@ -282,3 +332,123 @@ static std::unique_ptr<ExprAST> ParseBinOpRHS(
     }
 }
 
+static std::unique_ptr<PrototypeAST> ParsePrototype() {
+    if (CurTok != tok_identifier){
+        return LogErrorP("Expected function name in prototype");
+    }
+
+    std::string FnName = IdentifierStr;
+    getNextToken(); //eat identifier
+
+    if (CurTok != '(')
+        return LogErrorP("Expected '(' in prototype");
+
+    std::vector<std::string> ArgNames;
+    while (getNextToken() == tok_identifier) {
+        ArgNames.push_back(IdentifierStr);
+    if (CurTok != ')'){
+        return LogErrorP("Expected ')' in prototype");
+    }
+
+    getNextToken();  // eat ')'.
+
+    return std::make_unique<PrototypeAST>(FnName, std::move(ArgNames));
+
+    }
+}
+
+
+static std::unique_ptr<FunctionAST> ParseDefinition() {
+    getNextToken(); // eat def
+    auto Proto = ParsePrototype();
+    if (!Proto) {
+        return nullptr;
+    }
+
+    auto E = ParseExpression();
+    if (E) {
+        return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+    } else {
+        return nullptr;
+    }
+}
+
+static std::unique_ptr<PrototypeAST> ParseExtern() {
+    getNextToken(); // eat extern
+    return ParsePrototype();
+}
+
+static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
+    auto E = ParseExpression();
+    if (E) {
+        auto Proto = std::make_unique<PrototypeAST>("", std::vector<std::string>());
+        return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+    }
+    return nullptr;
+}
+
+
+static void HandleDefinition() {
+    if (ParseDefinition()) {
+      fprintf(stderr, "Parsed a function definition.\n");
+    } else {
+      // Skip token for error recovery.
+      getNextToken();
+    }
+}
+  
+  static void HandleExtern() {
+    if (ParseExtern()) {
+      fprintf(stderr, "Parsed an extern\n");
+    } else {
+      // Skip token for error recovery.
+      getNextToken();
+    }
+}
+  
+  static void HandleTopLevelExpression() {
+    // Evaluate a top-level expression into an anonymous function.
+    if (ParseTopLevelExpr()) {
+      fprintf(stderr, "Parsed a top-level expr\n");
+    } else {
+      // Skip token for error recovery.
+      getNextToken();
+    }
+}
+  
+  /// top ::= definition | external | expression | ';'
+  static void MainLoop() {
+    while (true) {
+      fprintf(stderr, "ready> ");
+      switch (CurTok) {
+      case tok_eof:
+        return;
+      case ';': // ignore top-level semicolons.
+        getNextToken();
+        break;
+      case tok_def:
+        HandleDefinition();
+        break;
+      case tok_extern:
+        HandleExtern();
+        break;
+      default:
+        HandleTopLevelExpression();
+        break;
+      }
+    }
+}
+
+
+static std::unique_ptr<LLVMContext> TheContext;
+static std::unique_ptr<IRBuilder<>> Builder;
+static std::unique_ptr<Module> TheModule;
+static std::map<std::string, Value *> NamedValues;
+
+int main() {
+    fprintf(stderr, "ready> ");
+    getNextToken();
+
+    MainLoop();
+    return 0;
+}
