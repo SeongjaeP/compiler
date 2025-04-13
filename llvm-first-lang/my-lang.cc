@@ -96,6 +96,74 @@ public:
 };
 
 
+class IfExprAST : public ExprAST {
+    std::unique_ptr<ExprAST> Cond, Then, Else;
+
+public:
+    IfExprAST(std::unique_ptr<ExprAST> Cod, std::unique_ptr<ExprAST> Then,
+                std::unique_ptr<ExprAST> Else)
+    : Cond(std::move(COnd)), Then(std::move(Then)), Else(std::move(Else)) {}
+
+    Value *codegen() override;
+};
+
+static std::unique_ptr<ExprAST> ParseIfExpr() {
+    getNextToken(); // 'if' move next token
+    
+    auto Cond = ParseExpression(); // 조건 부분 파싱
+    if (!Cond) return nullptr;
+
+    if (CurTok != tok_then) return LogError("expected then");
+    getNextToken();
+
+    auto Then = ParseExpression();
+    if (!Then) return nullptr;
+
+    if (CurTok != tok_else) return LogError("expected then");
+    getNextToken();
+
+    auto Else = ParseExpression();
+    if (!Else) return nullptr;
+
+    return std::make_unique<IfExprAST>(
+        std::move(Cond), std::move(Then), std::move(Else)
+    );
+}
+
+Value *IfExprAST::codegen(){
+    Value *CondV = Cond -> codegen();
+    if (!CondV) return nullptr;
+
+    CondV = Builder -> CreateFCmpONE(
+        CondV, ConstantFP::get(*TheContext, APFloat(0.0)), "ifcond");
+    
+    Function *TheFunction = Builder -> GetInsertBlock() -> getParent();
+
+    BasicBlock *ThenBB = BasicBlock::Create(*TheContext, "then", TheFunction);
+    BasicBlock *ElseBB = BasicBlock::Create(*TheContext, "else");
+    BasicBlock *MergeBB = BasicBlock::Create(*TheContext, "ifcont");
+    
+    Builder -> CreateCondBr(CondV, ThenBB, ElseBB);
+
+    Builder -> SetInsertPoint(ThenBB);
+
+    Value *ThenV = Then -> codegen();
+    if (!ThenV)
+        return nullptr;
+    
+    Builder -> CreateBr(MergeBB);
+    ThenBB = Builder->GetInsertBlock();
+
+    TheFunction -> Insert(TheFunction -> end(), ElseBB);
+    Builder -> SetInsertPoint(ElseBB);
+
+    Value *ElseV = Else -> codegen();
+
+
+}
+
+
+
 
 class NumberExprAST : public ExprAST {
     double Val;
@@ -452,3 +520,26 @@ int main() {
     MainLoop();
     return 0;
 }
+
+
+
+void InitializeModuleAndManager(void) {
+    TheContext = std::make_unique<LLVMCOntext>();
+    TheModule = std::make_unique<Module>("KaleidoscopeJIT", *TheContext);
+    TheModule -> setDataLayout(TheJIT -> getDataLayout());
+
+    Builder = std::make_unique<IRBuilder<>>(*TheContext);
+
+    // Create new pass and analysis manager.
+    TheFPM = std::make_unique<FunctionPassManager>();
+    TheLAM = std::make_unique<LoopAnalysisManager>();
+    TheFAM = std::make_unique<FunctionAnalysisManager>();
+    TheCGAM = std::make_unique<CGSCCAnalysisManager>();
+    TheMAM = std::make_unique<ModuleAnalysisManager>();
+    ThePIC = std::make_unique<PassInstrumentationCallbacks>();
+    TheSI = std::make_unique<StandardInstrumentations>(*TheContext,
+                                                    /*DebugLogging*/ true);
+    TheSI->registerCallbacks(*ThePIC, TheMAM.get());
+}
+
+
